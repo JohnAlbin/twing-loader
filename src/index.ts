@@ -32,14 +32,13 @@ const optionsSchema = {
 };
 
 class PathSupportingArrayLoader extends TwingLoaderArray {
-    getSourceContext(name: string, from: TwingSource): Promise<TwingSource> {
-        return super.getSourceContext(name, from).then((source) => {
-            return new TwingSource(source.getCode(), source.getName(), name);
-        })
+    async getSourceContext(name: string, from: TwingSource): Promise<TwingSource> {
+        const source = await super.getSourceContext(name, from);
+        return new TwingSource(source.getCode(), source.getName(), name);
     }
 }
 
-export default async function (this:loader.LoaderContext, source: string):Promise<string | Buffer | void | undefined> {
+export default function (this:loader.LoaderContext, source: string):string | Buffer | void | undefined {
     const callback = this.async();
 
     const getTemplateHash = (name: string) => {
@@ -70,47 +69,65 @@ export default async function (this:loader.LoaderContext, source: string):Promis
 
         let tokenStream: TwingTokenStream;
         let nodeModule: TwingNodeModule;
+        let visitor: Visitor;
 
         try {
             tokenStream = environment.tokenize(sourceContext);
             nodeModule = environment.parse(tokenStream);
-        } catch (err) {
-            this.callback(err);
-            return null;
+            visitor = new Visitor(loader, resourcePath, getTemplateHash);
+        } catch (error) {
+            callback(error);
+            return;
         }
 
-        let visitor = new Visitor(loader, resourcePath, getTemplateHash);
+        visitor
+            .getTemplateNames(nodeModule)
+            .then((foundTemplateNames) => {
+                const precompiledTemplate = environment.compile(nodeModule);
 
-        await visitor.visit(nodeModule);
-
-        let precompiledTemplate = environment.compile(nodeModule);
-
-        parts.push(`let templatesModule = (() => {
-let module = {
+                parts.push(`let templatesModule = (() => {
+const module = {
     exports: undefined
 };
 
 ${precompiledTemplate}
 
-    return module.exports;
+return module.exports;
 })();
 `);
 
-        for (let foundTemplateName of visitor.foundTemplateNames) {
-            // require takes module name separated with forward slashes
-            parts.push(`require('${slash(foundTemplateName)}');`);
-        }
+                for (let foundTemplateName of foundTemplateNames) {
+                    // require takes module name separated with forward slashes
+                    parts.push(`require('${slash(foundTemplateName)}');`);
+                }
 
-        parts.push(`env.registerTemplatesModule(templatesModule, '${key}');`);
+                parts.push(`env.registerTemplatesModule(templatesModule, '${key}');`);
 
-        parts.push(`
-let loadTemplate = () => env.loadTemplate('${key}');
+                // Normally, to get the template, we'd use env.loadTemplate(),
+                // which returns a Promise to get the template. But since we
+                // just synchronously inserted the template with
+                // registerTemplatesModule(), we can skip creating a Promise by
+                // retrieving the template directly from the Twing environment's
+                // loadedTemplates map.
+                parts.push(`
+const renderTemplate = (context = {}) => {
+  const name = '${key}';
+  env.emit('template', name);
+  const template = env.loadedTemplates.get(name));
+  return template.render(context);
+};
 
-module.exports = (context = {}) => {
-    return loadTemplate().then((template) => template.render(context));
-};`);
+module.exports = renderTemplate;
+`);
 
-        callback(null, parts.join('\n'));
+                callback(null, parts.join('\n'));
+                return;
+            })
+            .catch(error => {
+                callback(error);
+                return;
+            });
+
     } else {
         environment.setLoader(new TwingLoaderChain([
             new PathSupportingArrayLoader(new Map([
@@ -119,12 +136,18 @@ module.exports = (context = {}) => {
             loader
         ]));
 
+        const addDependencyTasks:Promise<void>[] = [];
         environment.on('template', (name: string, from: TwingSource) => {
-            environment.getLoader().resolve(name, from)
-              .then((path) => this.addDependency(path))
-              .catch((e) => {});
+            addDependencyTasks.push(
+                environment.getLoader().resolve(name, from)
+                    .then((path) => this.addDependency(path))
+            );
         });
 
-        callback(null, `module.exports = ${JSON.stringify(await environment.render(resourcePath, renderContext))};`);
+        environment.render(resourcePath, renderContext).then(async (renderedTemplate) => {
+            await Promise.all(addDependencyTasks);
+            callback(null, `module.exports = ${JSON.stringify(renderedTemplate)};`);
+            return;
+        })
     }
 };

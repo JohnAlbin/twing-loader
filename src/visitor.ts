@@ -16,6 +16,11 @@ export class Visitor {
         this._foundTemplateNames = [];
     }
 
+    async getTemplateNames(node: TwingNode): Promise<string[]> {
+        await this.visit(node);
+        return this._foundTemplateNames;
+    }
+
     get foundTemplateNames(): string[] {
         return this._foundTemplateNames;
     }
