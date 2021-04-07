@@ -57,7 +57,7 @@ export default function (this:loader.LoaderContext, source: string):string | Buf
 
     // require takes module name separated with forward slashes
     let environment: TwingEnvironment = require(slash(environmentModulePath));
-    let loader = environment.getLoader();
+    let twingLoader = environment.getLoader();
 
     if (renderContext === undefined) {
         let parts: string[] = [
@@ -74,7 +74,7 @@ export default function (this:loader.LoaderContext, source: string):string | Buf
         try {
             tokenStream = environment.tokenize(sourceContext);
             nodeModule = environment.parse(tokenStream);
-            visitor = new Visitor(loader, resourcePath, getTemplateHash);
+            visitor = new Visitor(twingLoader, resourcePath, getTemplateHash);
         } catch (error) {
             callback(error);
             return;
@@ -133,13 +133,14 @@ module.exports = renderTemplate;
             new PathSupportingArrayLoader(new Map([
                 [resourcePath, source]
             ])),
-            loader
+            twingLoader
         ]));
+        const newLoader = environment.getLoader();
 
         const addDependencyTasks:Promise<void>[] = [];
         environment.on('template', (name: string, from: TwingSource) => {
             addDependencyTasks.push(
-                environment.getLoader().resolve(name, from)
+                newLoader.resolve(name, from)
                     .then((path) => this.addDependency(path))
             );
         });
