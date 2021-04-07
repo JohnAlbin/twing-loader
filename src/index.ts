@@ -49,23 +49,23 @@ export default function (this:loader.LoaderContext, source: string):string | Buf
 
     validateOptions(optionsSchema, options, 'Twing loader');
 
-    let resourcePath: string = slash(this.resourcePath);
-    let environmentModulePath: string = options.environmentModulePath;
-    let renderContext: any = options.renderContext;
+    const resourcePath: string = slash(this.resourcePath);
+    const environmentModulePath: string = options.environmentModulePath;
+    const renderContext: any = options.renderContext;
 
     this.addDependency(slash(environmentModulePath));
 
     // require takes module name separated with forward slashes
-    let environment: TwingEnvironment = require(slash(environmentModulePath));
-    let twingLoader = environment.getLoader();
+    const environment: TwingEnvironment = require(slash(environmentModulePath));
+    const twingLoader = environment.getLoader();
 
     if (renderContext === undefined) {
-        let parts: string[] = [
+        const parts: string[] = [
             `const env = require('${slash(environmentModulePath)}');`
         ];
 
-        let key = getTemplateHash(resourcePath);
-        let sourceContext: TwingSource = new TwingSource(source, `${key}`);
+        const key = getTemplateHash(resourcePath);
+        const sourceContext: TwingSource = new TwingSource(source, `${key}`);
 
         let tokenStream: TwingTokenStream;
         let nodeModule: TwingNodeModule;
@@ -85,7 +85,7 @@ export default function (this:loader.LoaderContext, source: string):string | Buf
             .then((foundTemplateNames) => {
                 const precompiledTemplate = environment.compile(nodeModule);
 
-                parts.push(`let templatesModule = (() => {
+                parts.push(`const templatesModule = (() => {
 const module = {
     exports: undefined
 };
@@ -96,7 +96,7 @@ return module.exports;
 })();
 `);
 
-                for (let foundTemplateName of foundTemplateNames) {
+                for (const foundTemplateName of foundTemplateNames) {
                     // require takes module name separated with forward slashes
                     parts.push(`require('${slash(foundTemplateName)}');`);
                 }
