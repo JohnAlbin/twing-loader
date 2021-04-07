@@ -117,7 +117,7 @@ export default function (this:loader.LoaderContext, source: string):string | Buf
                     const renderTemplate = (context = {}) => {
                       const name = '${key}';
                       env.emit('template', name);
-                      const template = env.loadedTemplates.get(name));
+                      const template = env.loadedTemplates.get(name);
                       return template.render(context);
                     };
 
