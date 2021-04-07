@@ -1,9 +1,10 @@
-import {getOptions} from 'loader-utils';
+import {getOptions, OptionObject} from 'loader-utils';
 import {loader} from 'webpack';
 import {
     TwingEnvironment,
     TwingLoaderArray,
     TwingLoaderChain,
+    TwingLoaderInterface,
     TwingNodeModule,
     TwingSource, TwingTokenStream
 } from 'twing';
@@ -45,34 +46,50 @@ export default function (this:loader.LoaderContext, source: string):string | Buf
         return this.mode !== 'production' ? name : hex.stringify(sha256(name));
     };
 
-    const options = getOptions(this);
+    let options: OptionObject;
+    let resourcePath: string;
+    let environmentModulePath: string;
+    let renderContext: any;
+    let environment: TwingEnvironment;
+    let twingLoader: TwingLoaderInterface;
 
-    validateOptions(optionsSchema, options, 'Twing loader');
+    try {
+        options = getOptions(this);
 
-    const resourcePath: string = slash(this.resourcePath);
-    const environmentModulePath: string = options.environmentModulePath;
-    const renderContext: any = options.renderContext;
+        validateOptions(optionsSchema, options, 'Twing loader');
 
-    this.addDependency(slash(environmentModulePath));
+        resourcePath = slash(this.resourcePath);
+        environmentModulePath = options.environmentModulePath;
+        renderContext = options.renderContext;
 
-    // require takes module name separated with forward slashes
-    const environment: TwingEnvironment = require(slash(environmentModulePath));
-    const twingLoader = environment.getLoader();
+        this.addDependency(slash(environmentModulePath));
+
+        // require takes module name separated with forward slashes
+        environment = require(slash(environmentModulePath));
+        twingLoader = environment.getLoader();
+
+    } catch (error) {
+        callback(error);
+        return;
+    }
 
     if (renderContext === undefined) {
-        // All parts of the exported module should be synchronous code.
-        const parts: string[] = [
-            `const env = require('${slash(environmentModulePath)}');`
-        ];
-
-        const key = getTemplateHash(resourcePath);
-        const sourceContext: TwingSource = new TwingSource(source, `${key}`);
-
+        const parts: string[] = [];
+        let key: string;
+        let sourceContext: TwingSource;
         let tokenStream: TwingTokenStream;
         let nodeModule: TwingNodeModule;
         let visitor: Visitor;
 
         try {
+            // All parts of the exported module should be synchronous code.
+            parts.push(
+                `const env = require('${slash(environmentModulePath)}');`
+            );
+
+            key = getTemplateHash(resourcePath);
+            sourceContext = new TwingSource(source, `${key}`);
+
             tokenStream = environment.tokenize(sourceContext);
             nodeModule = environment.parse(tokenStream);
             visitor = new Visitor(twingLoader, resourcePath, getTemplateHash);
@@ -127,33 +144,48 @@ export default function (this:loader.LoaderContext, source: string):string | Buf
                 callback(null, parts.join('\n'));
                 return;
             })
+            // Catch any errors in the Promise chain and return them to webpack.
             .catch(error => {
                 callback(error);
                 return;
             });
 
     } else {
-        environment.setLoader(new TwingLoaderChain([
-            new PathSupportingArrayLoader(new Map([
-                [resourcePath, source]
-            ])),
-            twingLoader
-        ]));
-        const newLoader = environment.getLoader();
-
         const addDependencyTasks:Promise<void>[] = [];
-        environment.on('template', (name: string, from: TwingSource) => {
-            addDependencyTasks.push(
-                newLoader.resolve(name, from)
-                    .then((path) => this.addDependency(path))
-            );
-        });
+
+        try {
+            environment.setLoader(new TwingLoaderChain([
+                new PathSupportingArrayLoader(new Map([
+                    [resourcePath, source]
+                ])),
+                twingLoader
+            ]));
+            const newLoader = environment.getLoader();
+
+            environment.on('template', (name: string, from: TwingSource) => {
+                addDependencyTasks.push(
+                    newLoader.resolve(name, from)
+                        .then((path) => this.addDependency(path))
+                );
+            });
+        } catch (error) {
+            callback(error);
+            return;
+        }
 
         environment
             .render(resourcePath, renderContext)
             .then(async (renderedTemplate) => {
-                await Promise.all(addDependencyTasks);
-                callback(null, `module.exports = ${JSON.stringify(renderedTemplate)};`);
+                try {
+                    await Promise.all(addDependencyTasks);
+                    callback(null, `module.exports = ${JSON.stringify(renderedTemplate)};`);
+                } catch (error) {
+                    callback(error);
+                }
+                return;
+            })
+            .catch(error => {
+                callback(error);
                 return;
             });
     }
